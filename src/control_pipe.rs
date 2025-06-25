@@ -165,12 +165,16 @@ impl<B: UsbBus> ControlPipe<'_, B> {
                     "Control transfer completed. Current state: {:?}",
                     self.state
                 );
-                match self.ep_out.read(&mut []) {
-                    Ok(_) => {}
+                let mut tmp_buffer = [0u8; 128];
+                match self.ep_out.read(&mut tmp_buffer) {
+                    Ok(returned_bytes) => {
+                        usb_debug!("EP0 OUT read: {} bytes, ignoring data", returned_bytes);
+                    }
                     Err(UsbError::WouldBlock) => {
                         // Host sent a new SETUP transaction, which may have overwritten the ZLP
                     }
                     Err(err) => {
+                        usb_debug!("Failed EP0 read: {:?}", err);
                         return Err(err);
                     }
                 }
@@ -274,6 +278,11 @@ impl<B: UsbBus> ControlPipe<'_, B> {
 
         if len > self.buf.len() {
             self.set_error();
+            defmt::error!(
+                "Buffer overflow in ControlPipe::accept_in: data length {} exceeds buffer length {}",
+                len,
+                self.buf.len()
+            );
             return Err(UsbError::BufferOverflow);
         }
 

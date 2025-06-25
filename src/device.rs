@@ -408,6 +408,7 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                     usb_trace!("Processing Interface::GetInterface");
                     // Reject interface numbers bigger than 255
                     if req.index > core::u8::MAX.into() {
+                        usb_debug!("Rejecting GET_INTERFACE request with index > 255");
                         return xfer.reject();
                     }
 
@@ -522,6 +523,7 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                 (Recipient::Interface, Request::SET_INTERFACE, alt_setting) => {
                     // Reject interface numbers and alt settings bigger than 255
                     if req.index > core::u8::MAX.into() || alt_setting > core::u8::MAX.into() {
+                        usb_debug!("Rejecting SET_INTERFACE request with index or alt setting > 255");
                         xfer.reject()?;
                         return Ok(());
                     }
@@ -546,6 +548,7 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                 }
 
                 _ => {
+                    usb_debug!("Rejecting control transfer with unknown request {}", req);
                     xfer.reject()?;
                     return Ok(());
                 }
@@ -642,6 +645,11 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                                 .iter()
                                 .find(|lang| lang.id == lang_id)
                             else {
+                                usb_debug!("Unknown language ID: {}", lang_id);
+                                config.string_descriptors.iter().for_each(| desc | {
+                                    usb_debug!("descriptor: id:{} mfg:{} prod:{} serial:{}", desc.id, desc.manufacturer, desc.product, desc.serial);
+                                });
+
                                 xfer.reject()?;
                                 return Ok(());
                             };
@@ -664,12 +672,14 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                     if let Some(string_descriptor) = string {
                         accept_writer(xfer, |w| w.string(string_descriptor))?;
                     } else {
+                        usb_debug!("Unknown string index: {}", index);
                         xfer.reject()?;
                     }
                 }
             },
 
             _ => {
+                usb_debug!("Rejecting control transfer with unknown descriptor type: {}", dtype);
                 xfer.reject()?;
             }
         };
