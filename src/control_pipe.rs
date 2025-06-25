@@ -165,6 +165,7 @@ impl<B: UsbBus> ControlPipe<'_, B> {
                     "Control transfer completed. Current state: {:?}",
                     self.state
                 );
+                usb_debug!("EP0 OUT status stage acknowledged");
                 self.ep_out.read(&mut [])?;
                 self.state = ControlState::Idle;
             }
@@ -266,6 +267,11 @@ impl<B: UsbBus> ControlPipe<'_, B> {
 
         if len > self.buf.len() {
             self.set_error();
+            defmt::error!(
+                "Buffer overflow in ControlPipe::accept_in: data length {} exceeds buffer length {}",
+                len,
+                self.buf.len()
+            );
             return Err(UsbError::BufferOverflow);
         }
 

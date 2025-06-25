@@ -60,6 +60,11 @@ impl DescriptorWriter<'_> {
     pub fn write(&mut self, descriptor_type: u8, descriptor: &[u8]) -> Result<()> {
         self.write_with(descriptor_type, |buf| {
             if descriptor.len() > buf.len() {
+                usb_debug!(
+                    "Descriptor too long: {} bytes, buffer size: {}",
+                    descriptor.len(),
+                    buf.len()
+                );
                 return Err(UsbError::BufferOverflow);
             }
 
@@ -81,6 +86,11 @@ impl DescriptorWriter<'_> {
         f: impl FnOnce(&mut [u8]) -> Result<usize>,
     ) -> Result<()> {
         if self.position + 2 > self.buf.len() {
+            usb_debug!(
+                "DescriptorWriter::write_with overflow: position {} exceeds buffer length {}",
+                self.position + 2,
+                self.buf.len()
+            );
             return Err(UsbError::BufferOverflow);
         }
 
@@ -90,6 +100,12 @@ impl DescriptorWriter<'_> {
         let total_len = f(data_buf)? + 2;
 
         if self.position + total_len > self.buf.len() {
+            usb_debug!(
+                "DescriptorWriter::write_with overflow: position {} + total length {} exceeds buffer length {}",
+                self.position,
+                total_len,
+                self.buf.len()
+            );
             return Err(UsbError::BufferOverflow);
         }
 
@@ -335,6 +351,10 @@ impl DescriptorWriter<'_> {
 
         self.write_with(descriptor_type::ENDPOINT, |buf| {
             if buf.len() < 5 {
+                usb_debug!(
+                    "Buffer too small for endpoint descriptor: {} bytes, need at least 5",
+                    buf.len()
+                );
                 return Err(UsbError::BufferOverflow);
             }
 
@@ -355,6 +375,11 @@ impl DescriptorWriter<'_> {
         let mut pos = self.position;
 
         if pos + 2 > self.buf.len() {
+            usb_debug!(
+                "DescriptorWriter::string overflow: position {} exceeds buffer length {}",
+                pos + 2,
+                self.buf.len()
+            );
             return Err(UsbError::BufferOverflow);
         }
 
@@ -365,6 +390,11 @@ impl DescriptorWriter<'_> {
 
         for c in string.encode_utf16() {
             if pos >= self.buf.len() {
+                usb_debug!(
+                    "DescriptorWriter::string overflow: position {} exceeds buffer length {}",
+                    pos,
+                    self.buf.len()
+                );
                 return Err(UsbError::BufferOverflow);
             }
 
@@ -425,6 +455,12 @@ impl<'w, 'a: 'w> BosWriter<'w, 'a> {
         let blen = data.len();
 
         if (start + blen + 3) > self.writer.buf.len() || (blen + 3) > 255 {
+            usb_debug!(
+                "BosWriter::capability overflow: start {} + length {} exceeds buffer length {}",
+                start + blen + 3,
+                blen + 3,
+                self.writer.buf.len()
+            );
             return Err(UsbError::BufferOverflow);
         }
 

@@ -160,6 +160,11 @@ impl<'a, 'p, 'r, B: UsbBus> ControlIn<'a, 'p, 'r, B> {
     pub fn accept_with(self, data: &[u8]) -> Result<()> {
         self.pipe.accept_in(|buf| {
             if data.len() > buf.len() {
+                usb_debug!(
+                    "ControlIn::accept_with overflow: data length {} exceeds buffer length {}",
+                    data.len(),
+                    buf.len()
+                );
                 return Err(UsbError::BufferOverflow);
             }
 
