@@ -148,8 +148,10 @@ impl<B: UsbBus> ControlPipe<'_, B> {
     }
 
     pub fn handle_out(&mut self) -> Result<Option<Request>> {
+        debug::note_handle_out_enter();
         match self.state {
             ControlState::DataOut(req) => {
+                debug::note_handle_out_data_out();
                 let i = self.i;
                 let count = match self.ep_out.read(&mut self.buf[i..]) {
                     Ok(count) => count,
@@ -182,6 +184,7 @@ impl<B: UsbBus> ControlPipe<'_, B> {
             | ControlState::DataInLast
             | ControlState::DataInZlp
             | ControlState::StatusOut => {
+                debug::note_handle_out_status_out();
                 usb_debug!(
                     "Control transfer completed. Current state: {:?}",
                     self.state
@@ -191,6 +194,7 @@ impl<B: UsbBus> ControlPipe<'_, B> {
                 self.state = ControlState::Idle;
             }
             _ => {
+                debug::note_handle_out_other();
                 // Discard the packet
                 usb_debug!(
                     "Discarding EP0 data due to unexpected state. Current state: {:?}",
@@ -207,29 +211,36 @@ impl<B: UsbBus> ControlPipe<'_, B> {
     }
 
     pub fn handle_in_complete(&mut self) -> Result<bool> {
+        debug::note_in_complete_enter();
         match self.state {
             ControlState::DataIn => {
+                debug::note_in_complete_data_in();
                 self.write_in_chunk()?;
             }
             ControlState::DataInZlp => {
+                debug::note_in_complete_data_in_zlp();
                 self.ep_in.write(&[])?;
                 usb_trace!("wrote EP0: ZLP");
                 self.state = ControlState::DataInLast;
             }
             ControlState::DataInLast => {
+                debug::note_in_complete_data_in_last();
                 self.ep_out.unstall();
                 self.state = ControlState::StatusOut;
             }
             ControlState::StatusIn => {
+                debug::note_in_complete_status_in();
                 self.state = ControlState::Idle;
                 return Ok(true);
             }
             ControlState::Idle => {
+                debug::note_in_complete_idle();
                 // If we received a message on EP0 while sending the last portion of an IN
                 // transfer, we may have already transitioned to IDLE without getting the last
                 // IN-complete status. Just ignore this indication.
             }
             _ => {
+                debug::note_in_complete_other();
                 // If we get IN-COMPLETE indications in unexpected states, it's generally because
                 // of control flow in previous phases updating after our packet was successfully
                 // sent. Ignore these indications if they don't drive any further behavior.
