@@ -113,10 +113,20 @@ impl<'a, B: UsbBus> UsbDeviceBuilder<'a, B> {
 
     /// Creates the [`UsbDevice`] instance with the configuration in this builder.
     pub fn build(self) -> Result<UsbDevice<'a, B>, BuilderError> {
+        usb_debug!(
+            "usb-device: builder build start mps0={} control_buf_len={} vid=0x{:04x} pid=0x{:04x}",
+            self.config.max_packet_size_0,
+            self.control_buffer.len(),
+            self.config.vendor_id,
+            self.config.product_id
+        );
+
         if self.control_buffer.len() < self.config.max_packet_size_0 as usize {
+            usb_debug!("usb-device: builder control buffer too small");
             return Err(BuilderError::ControlBufferTooSmall);
         }
 
+        usb_debug!("usb-device: builder handing off to UsbDevice::build");
         Ok(UsbDevice::build(
             self.alloc,
             self.config,

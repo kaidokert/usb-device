@@ -198,6 +198,7 @@ pub mod test_class;
 pub mod dummy;
 
 mod control_pipe;
+pub mod debug;
 
 mod device_builder;
 

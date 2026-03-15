@@ -10,7 +10,12 @@ macro_rules! usb_log {
     (debug, $($arg:expr),*) => { defmt::debug!($($arg),*) };
 }
 
-#[cfg(not(any(feature = "log", feature = "defmt")))]
+#[cfg(all(feature = "rtt-debug", not(any(feature = "log", feature = "defmt"))))]
+macro_rules! usb_log {
+    ($level:ident, $($arg:expr),*) => { rtt_target::rprintln!($($arg),*) };
+}
+
+#[cfg(not(any(feature = "log", feature = "defmt", feature = "rtt-debug")))]
 macro_rules! usb_log {
     ($level:ident, $($arg:expr),*) => {{ $( let _ = $arg; )* }}
 }

@@ -14,12 +14,14 @@ defmt = { version = "0.3", optional = true }
 portable-atomic = { version = "1.2.0", default-features = false }
 heapless = "0.8"
 log = { version = "0.4", default-features = false, optional = true}
+rtt-target = { version = "0.5", optional = true }
 
 [dev-dependencies]
 rusb = "0.9.1"
 rand = "0.8.5"
 
 [features]
+rtt-debug = ["dep:rtt-target"]
 
 # Use larger endpoint buffers for highspeed operation (default fullspeed)
 #

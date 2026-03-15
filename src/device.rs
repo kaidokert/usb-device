@@ -2,6 +2,7 @@ use crate::bus::{InterfaceNumber, PollResult, StringIndex, UsbBus, UsbBusAllocat
 use crate::class::{ControlIn, ControlOut, UsbClass};
 use crate::control;
 use crate::control_pipe::ControlPipe;
+use crate::debug;
 use crate::descriptor::{descriptor_type, lang_id::LangID, BosWriter, DescriptorWriter};
 pub use crate::device_builder::{StringDescriptors, UsbDeviceBuilder, UsbVidPid};
 use crate::endpoint::{EndpointAddress, EndpointType};
@@ -91,6 +92,13 @@ impl<B: UsbBus> UsbDevice<'_, B> {
         config: Config<'a>,
         control_buffer: &'a mut [u8],
     ) -> UsbDevice<'a, B> {
+        usb_debug!(
+            "usb-device: device build start mps0={} control_buf_len={}",
+            config.max_packet_size_0,
+            control_buffer.len()
+        );
+
+        usb_debug!("usb-device: alloc control_out");
         let control_out = alloc
             .alloc(
                 Some(0x00.into()),
@@ -100,6 +108,7 @@ impl<B: UsbBus> UsbDevice<'_, B> {
             )
             .expect("failed to alloc control endpoint");
 
+        usb_debug!("usb-device: alloc control_in");
         let control_in = alloc
             .alloc(
                 Some(0x80.into()),
@@ -109,7 +118,9 @@ impl<B: UsbBus> UsbDevice<'_, B> {
             )
             .expect("failed to alloc control endpoint");
 
+        usb_debug!("usb-device: freeze bus");
         let bus = alloc.freeze();
+        usb_debug!("usb-device: control pipe new");
 
         UsbDevice {
             bus,
@@ -236,12 +247,14 @@ impl<B: UsbBus> UsbDevice<'_, B> {
 
                     match req {
                         Some(req) if req.direction == UsbDirection::In => {
+                            usb_debug!("dispatching control_in: {:?}", req);
                             if let Err(_err) = self.control_in(classes, req) {
                                 // TODO: Propagate error out of `poll()`
                                 usb_debug!("Failed to handle input control request: {:?}", _err);
                             }
                         }
                         Some(req) if req.direction == UsbDirection::Out => {
+                            usb_debug!("dispatching control_out: {:?}", req);
                             if let Err(_err) = self.control_out(classes, req) {
                                 // TODO: Propagate error out of `poll()`
                                 usb_debug!("Failed to handle output control request: {:?}", _err);
@@ -345,6 +358,8 @@ impl<B: UsbBus> UsbDevice<'_, B> {
     fn control_in(&mut self, classes: &mut ClassList<'_, B>, req: control::Request) -> Result<()> {
         use crate::control::{Recipient, Request};
 
+        usb_debug!("control_in req: {:?}", req);
+
         for cls in classes.iter_mut() {
             cls.control_in(ControlIn::new(&mut self.control, &req));
 
@@ -440,6 +455,8 @@ impl<B: UsbBus> UsbDevice<'_, B> {
     fn control_out(&mut self, classes: &mut ClassList<'_, B>, req: control::Request) -> Result<()> {
         use crate::control::{Recipient, Request};
 
+        usb_debug!("control_out req: {:?}", req);
+
         for cls in classes.iter_mut() {
             cls.control_out(ControlOut::new(&mut self.control, &req));
 
@@ -450,6 +467,12 @@ impl<B: UsbBus> UsbDevice<'_, B> {
 
         if req.request_type == control::RequestType::Standard {
             let xfer = ControlOut::new(&mut self.control, &req);
+            usb_debug!(
+                "control_out standard recipient={:?} request={:?} value={}",
+                req.recipient,
+                req.request,
+                req.value
+            );
 
             const CONFIGURATION_NONE_U16: u16 = CONFIGURATION_NONE as u16;
             const CONFIGURATION_VALUE_U16: u16 = CONFIGURATION_VALUE as u16;
@@ -491,14 +514,27 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                 }
 
                 (Recipient::Device, Request::SET_ADDRESS, 1..=127) => {
+                    usb_debug!("control_out matched SET_ADDRESS");
+                    debug::note_set_address_match();
                     usb_debug!("Setting device address to {}", req.value);
                     if B::QUIRK_SET_ADDRESS_BEFORE_STATUS {
+                        usb_debug!("SET_ADDRESS before bus.set_device_address");
                         self.bus.set_device_address(req.value as u8);
+                        usb_debug!("SET_ADDRESS after bus.set_device_address");
                         self.device_state = UsbDeviceState::Addressed;
                     } else {
                         self.pending_address = req.value as u8;
                     }
-                    xfer.accept()?;
+                    usb_debug!("SET_ADDRESS before accept");
+                    debug::note_set_address_accept_attempt();
+                    match xfer.accept() {
+                        Ok(()) => debug::note_set_address_accept_ok(),
+                        Err(err) => {
+                            debug::note_set_address_accept_err();
+                            return Err(err);
+                        }
+                    }
+                    usb_debug!("SET_ADDRESS after accept");
                 }
 
                 (Recipient::Device, Request::SET_CONFIGURATION, CONFIGURATION_VALUE_U16) => {
@@ -523,7 +559,9 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                 (Recipient::Interface, Request::SET_INTERFACE, alt_setting) => {
                     // Reject interface numbers and alt settings bigger than 255
                     if req.index > core::u8::MAX.into() || alt_setting > core::u8::MAX.into() {
-                        usb_debug!("Rejecting SET_INTERFACE request with index or alt setting > 255");
+                        usb_debug!(
+                            "Rejecting SET_INTERFACE request with index or alt setting > 255"
+                        );
                         xfer.reject()?;
                         return Ok(());
                     }
@@ -548,7 +586,7 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                 }
 
                 _ => {
-                    usb_debug!("Rejecting control transfer with unknown request {}", req);
+                    usb_debug!("Rejecting control transfer with unknown request {:?}", req);
                     xfer.reject()?;
                     return Ok(());
                 }
@@ -579,11 +617,19 @@ impl<B: UsbBus> UsbDevice<'_, B> {
             xfer.accept(|buf| {
                 let mut writer = DescriptorWriter::new(buf);
                 f(&mut writer)?;
+                usb_debug!("descriptor accept_writer len={}", writer.position());
                 Ok(writer.position())
             })?;
 
             Ok(())
         }
+
+        usb_debug!(
+            "get_descriptor dtype={} index={} req_len={}",
+            dtype,
+            index,
+            req.length
+        );
 
         match dtype {
             descriptor_type::BOS if config.usb_rev > UsbRev::Usb200 => accept_writer(xfer, |w| {
@@ -645,9 +691,15 @@ impl<B: UsbBus> UsbDevice<'_, B> {
                                 .iter()
                                 .find(|lang| lang.id == lang_id)
                             else {
-                                usb_debug!("Unknown language ID: {}", lang_id);
-                                config.string_descriptors.iter().for_each(| desc | {
-                                    usb_debug!("descriptor: id:{} mfg:{} prod:{} serial:{}", desc.id, desc.manufacturer, desc.product, desc.serial);
+                                usb_debug!("Unknown language ID: {:?}", lang_id);
+                                config.string_descriptors.iter().for_each(|desc| {
+                                    usb_debug!(
+                                        "descriptor: id:{:?} mfg:{:?} prod:{:?} serial:{:?}",
+                                        desc.id,
+                                        desc.manufacturer,
+                                        desc.product,
+                                        desc.serial
+                                    );
                                 });
 
                                 xfer.reject()?;
@@ -679,7 +731,10 @@ impl<B: UsbBus> UsbDevice<'_, B> {
             },
 
             _ => {
-                usb_debug!("Rejecting control transfer with unknown descriptor type: {}", dtype);
+                usb_debug!(
+                    "Rejecting control transfer with unknown descriptor type: {}",
+                    dtype
+                );
                 xfer.reject()?;
             }
         };

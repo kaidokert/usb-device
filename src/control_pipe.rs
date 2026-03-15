@@ -1,5 +1,6 @@
 use crate::bus::UsbBus;
 use crate::control::Request;
+use crate::debug;
 use crate::endpoint::{EndpointIn, EndpointOut};
 use crate::{Result, UsbDirection, UsbError};
 use core::cmp::min;
@@ -29,6 +30,7 @@ pub struct ControlPipe<'a, B: UsbBus> {
     static_in_buf: Option<&'static [u8]>,
     i: usize,
     len: usize,
+    in_transfer_truncated: bool,
 }
 
 impl<B: UsbBus> ControlPipe<'_, B> {
@@ -45,6 +47,7 @@ impl<B: UsbBus> ControlPipe<'_, B> {
             static_in_buf: None,
             i: 0,
             len: 0,
+            in_transfer_truncated: false,
         }
     }
 
@@ -62,16 +65,22 @@ impl<B: UsbBus> ControlPipe<'_, B> {
     pub fn reset(&mut self) {
         usb_trace!("Control pipe reset");
         self.state = ControlState::Idle;
+        self.in_transfer_truncated = false;
     }
 
     pub fn handle_setup(&mut self) -> Option<Request> {
+        usb_debug!("handle_setup enter state={:?}", self.state);
         let count = match self.ep_out.read(&mut self.buf[..]) {
             Ok(count) => {
                 usb_trace!("Read {} bytes on EP0-OUT: {:?}", count, &self.buf[..count]);
                 count
             }
-            Err(UsbError::WouldBlock) => return None,
+            Err(UsbError::WouldBlock) => {
+                usb_debug!("handle_setup would block");
+                return None;
+            }
             Err(_) => {
+                usb_debug!("handle_setup read error");
                 return None;
             }
         };
@@ -80,13 +89,20 @@ impl<B: UsbBus> ControlPipe<'_, B> {
             Ok(req) => req,
             Err(_) => {
                 // Failed to parse SETUP packet. We are supposed to silently ignore this.
+                usb_debug!("handle_setup parse failed: {:?}", &self.buf[..count]);
                 return None;
             }
         };
 
+        usb_debug!("handle_setup parsed req: {:?}", req);
+
         // Now that we have properly parsed the setup packet, ensure the end-point is no longer in
         // a stalled state.
         self.ep_out.unstall();
+        self.static_in_buf = None;
+        self.i = 0;
+        self.len = 0;
+        self.in_transfer_truncated = false;
 
         usb_debug!("EP0 request received: {:?}", req);
 
@@ -108,18 +124,23 @@ impl<B: UsbBus> ControlPipe<'_, B> {
 
                 self.i = 0;
                 self.len = req.length as usize;
+                self.in_transfer_truncated = false;
                 self.state = ControlState::DataOut(req);
             } else {
                 // No data stage
 
                 self.len = 0;
+                self.in_transfer_truncated = false;
                 self.state = ControlState::CompleteOut;
+                usb_debug!("handle_setup -> CompleteOut");
                 return Some(req);
             }
         } else {
             // IN transfer
 
+            self.in_transfer_truncated = false;
             self.state = ControlState::CompleteIn(req);
+            usb_debug!("handle_setup -> CompleteIn");
             return Some(req);
         }
 
@@ -230,7 +251,9 @@ impl<B: UsbBus> ControlPipe<'_, B> {
         if self.i >= self.len {
             self.static_in_buf = None;
 
-            self.state = if count == self.ep_in.max_packet_size() as usize {
+            self.state = if !self.in_transfer_truncated
+                && count == self.ep_in.max_packet_size() as usize
+            {
                 ControlState::DataInZlp
             } else {
                 ControlState::DataInLast
@@ -241,16 +264,23 @@ impl<B: UsbBus> ControlPipe<'_, B> {
     }
 
     pub fn accept_out(&mut self) -> Result<()> {
+        usb_debug!("accept_out enter state={:?}", self.state);
+        debug::note_accept_out_enter();
         match self.state {
             ControlState::CompleteOut => {}
             _ => {
+                debug::note_accept_out_invalid_state();
                 usb_debug!("Cannot ACK, invalid state: {:?}", self.state);
                 return Err(UsbError::InvalidState);
             }
         };
 
+        usb_debug!("accept_out before ep_in.write([])");
         self.ep_in.write(&[])?;
+        debug::note_accept_out_write_ok();
+        usb_debug!("accept_out after ep_in.write([])");
         self.state = ControlState::StatusIn;
+        usb_debug!("accept_out -> StatusIn");
         Ok(())
     }
 
@@ -264,11 +294,12 @@ impl<B: UsbBus> ControlPipe<'_, B> {
         };
 
         let len = f(&mut self.buf[..])?;
+        usb_debug!("accept_in prepared len={} req_len={}", len, req.length);
 
         if len > self.buf.len() {
             self.set_error();
-            defmt::error!(
-                "Buffer overflow in ControlPipe::accept_in: data length {} exceeds buffer length {}",
+            usb_debug!(
+                "ControlPipe::accept_in overflow: data length {} exceeds buffer length {}",
                 len,
                 self.buf.len()
             );
@@ -295,7 +326,15 @@ impl<B: UsbBus> ControlPipe<'_, B> {
     fn start_in_transfer(&mut self, req: Request, data_len: usize) -> Result<()> {
         self.len = min(data_len, req.length as usize);
         self.i = 0;
+        self.in_transfer_truncated = data_len > req.length as usize;
         self.state = ControlState::DataIn;
+        usb_debug!(
+            "start_in_transfer data_len={} clipped_len={} req_len={} truncated={}",
+            data_len,
+            self.len,
+            req.length,
+            self.in_transfer_truncated
+        );
         self.write_in_chunk()?;
 
         Ok(())
