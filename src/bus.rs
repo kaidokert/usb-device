@@ -141,6 +141,14 @@ pub trait UsbBus: Sized {
     ///
     /// The default value for this constant is `false`, which corresponds to the USB 2.0 spec, 9.4.6
     const QUIRK_SET_ADDRESS_BEFORE_STATUS: bool = false;
+
+    /// Indicates that EP0 IN transfers ending on an exact max-packet boundary should keep the
+    /// pipe in the "needs one more completion phase" path even when the response was truncated to
+    /// the host request length.
+    ///
+    /// Some device controllers appear to require the control pipe to take the same completion path
+    /// as an exact max-packet transfer even when the transfer length was clipped to `wLength`.
+    const QUIRK_EP0_IN_EXACT_MPS_NEEDS_CONTINUE: bool = false;
 }
 
 struct AllocatorState {

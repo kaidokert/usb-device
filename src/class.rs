@@ -158,6 +158,7 @@ impl<'a, 'p, 'r, B: UsbBus> ControlIn<'a, 'p, 'r, B> {
 
     /// Accepts the transfer with the supplied buffer.
     pub fn accept_with(self, data: &[u8]) -> Result<()> {
+        usb_debug!("ControlIn::accept_with len={}", data.len());
         self.pipe.accept_in(|buf| {
             if data.len() > buf.len() {
                 usb_debug!(
@@ -183,6 +184,7 @@ impl<'a, 'p, 'r, B: UsbBus> ControlIn<'a, 'p, 'r, B> {
     /// Accepts the transfer with a callback that can write to the internal buffer of the control
     /// pipe. Can be used to avoid an extra copy.
     pub fn accept(self, f: impl FnOnce(&mut [u8]) -> Result<usize>) -> Result<()> {
+        usb_debug!("ControlIn::accept enter");
         self.pipe.accept_in(f)
     }
 

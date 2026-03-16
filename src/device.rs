@@ -406,7 +406,15 @@ impl<B: UsbBus> UsbDevice<'_, B> {
 
                 (Recipient::Device, Request::GET_DESCRIPTOR) => {
                     usb_trace!("Processing Device::GetDescriptor");
-                    UsbDevice::get_descriptor(&self.config, classes, xfer)?;
+                    debug::note_get_descriptor_enter();
+                    usb_debug!("before UsbDevice::get_descriptor");
+                    UsbDevice::get_descriptor(&self.config, classes, xfer).map_err(|err| {
+                        debug::note_get_descriptor_err();
+                        usb_debug!("UsbDevice::get_descriptor err: {:?}", err);
+                        err
+                    })?;
+                    debug::note_get_descriptor_ok();
+                    usb_debug!("after UsbDevice::get_descriptor");
                 }
 
                 (Recipient::Device, Request::GET_CONFIGURATION) => {
@@ -614,12 +622,22 @@ impl<B: UsbBus> UsbDevice<'_, B> {
             xfer: ControlIn<B>,
             f: impl FnOnce(&mut DescriptorWriter) -> Result<()>,
         ) -> Result<()> {
+            debug::note_descriptor_accept_enter();
+            usb_debug!("descriptor accept_writer enter");
             xfer.accept(|buf| {
                 let mut writer = DescriptorWriter::new(buf);
                 f(&mut writer)?;
                 usb_debug!("descriptor accept_writer len={}", writer.position());
                 Ok(writer.position())
+            })
+            .map_err(|err| {
+                debug::note_descriptor_accept_err();
+                usb_debug!("descriptor accept_writer err: {:?}", err);
+                err
             })?;
+
+            debug::note_descriptor_accept_ok();
+            usb_debug!("descriptor accept_writer done");
 
             Ok(())
         }

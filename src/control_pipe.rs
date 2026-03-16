@@ -21,6 +21,21 @@ enum ControlState {
     Error,
 }
 
+fn state_code(state: &ControlState) -> u32 {
+    match state {
+        ControlState::Idle => 0,
+        ControlState::DataIn => 1,
+        ControlState::DataInZlp => 2,
+        ControlState::DataInLast => 3,
+        ControlState::CompleteIn(_) => 4,
+        ControlState::StatusOut => 5,
+        ControlState::CompleteOut => 6,
+        ControlState::DataOut(_) => 7,
+        ControlState::StatusIn => 8,
+        ControlState::Error => 9,
+    }
+}
+
 /// Buffers and parses USB control transfers.
 pub struct ControlPipe<'a, B: UsbBus> {
     ep_out: EndpointOut<'a, B>,
@@ -149,6 +164,7 @@ impl<B: UsbBus> ControlPipe<'_, B> {
 
     pub fn handle_out(&mut self) -> Result<Option<Request>> {
         debug::note_handle_out_enter();
+        debug::note_handle_out_state(state_code(&self.state));
         match self.state {
             ControlState::DataOut(req) => {
                 debug::note_handle_out_data_out();
@@ -212,6 +228,7 @@ impl<B: UsbBus> ControlPipe<'_, B> {
 
     pub fn handle_in_complete(&mut self) -> Result<bool> {
         debug::note_in_complete_enter();
+        debug::note_in_complete_state(state_code(&self.state));
         match self.state {
             ControlState::DataIn => {
                 debug::note_in_complete_data_in();
@@ -262,9 +279,11 @@ impl<B: UsbBus> ControlPipe<'_, B> {
         if self.i >= self.len {
             self.static_in_buf = None;
 
-            self.state = if !self.in_transfer_truncated
-                && count == self.ep_in.max_packet_size() as usize
-            {
+            let exact_mps = count == self.ep_in.max_packet_size() as usize;
+            let needs_continue = exact_mps
+                && (!self.in_transfer_truncated || B::QUIRK_EP0_IN_EXACT_MPS_NEEDS_CONTINUE);
+
+            self.state = if needs_continue {
                 ControlState::DataInZlp
             } else {
                 ControlState::DataInLast
@@ -296,10 +315,12 @@ impl<B: UsbBus> ControlPipe<'_, B> {
     }
 
     pub fn accept_in(&mut self, f: impl FnOnce(&mut [u8]) -> Result<usize>) -> Result<()> {
+        debug::note_accept_in_enter();
         let req = match self.state {
             ControlState::CompleteIn(req) => req,
             _ => {
                 usb_debug!("EP0-IN cannot ACK, invalid state: {:?}", self.state);
+                debug::note_accept_in_err();
                 return Err(UsbError::InvalidState);
             }
         };
@@ -314,10 +335,22 @@ impl<B: UsbBus> ControlPipe<'_, B> {
                 len,
                 self.buf.len()
             );
+            debug::note_accept_in_err();
             return Err(UsbError::BufferOverflow);
         }
 
-        self.start_in_transfer(req, len)
+        match self.start_in_transfer(req, len) {
+            Ok(()) => {
+                debug::note_accept_in_ok();
+                usb_debug!("accept_in transfer started");
+                Ok(())
+            }
+            Err(err) => {
+                debug::note_accept_in_err();
+                usb_debug!("accept_in start_in_transfer err: {:?}", err);
+                Err(err)
+            }
+        }
     }
 
     pub fn accept_in_static(&mut self, data: &'static [u8]) -> Result<()> {
@@ -331,7 +364,16 @@ impl<B: UsbBus> ControlPipe<'_, B> {
 
         self.static_in_buf = Some(data);
 
-        self.start_in_transfer(req, data.len())
+        match self.start_in_transfer(req, data.len()) {
+            Ok(()) => {
+                usb_debug!("accept_in_static transfer started len={}", data.len());
+                Ok(())
+            }
+            Err(err) => {
+                usb_debug!("accept_in_static start_in_transfer err: {:?}", err);
+                Err(err)
+            }
+        }
     }
 
     fn start_in_transfer(&mut self, req: Request, data_len: usize) -> Result<()> {
@@ -346,7 +388,11 @@ impl<B: UsbBus> ControlPipe<'_, B> {
             req.length,
             self.in_transfer_truncated
         );
-        self.write_in_chunk()?;
+        if let Err(err) = self.write_in_chunk() {
+            usb_debug!("start_in_transfer write_in_chunk err: {:?}", err);
+            return Err(err);
+        }
+        usb_debug!("start_in_transfer first chunk queued");
 
         Ok(())
     }
